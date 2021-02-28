@@ -1,3 +1,4 @@
+const crypto = require('crypto');
 const mongoose = require('mongoose');
 const validator = require('validator');
 const bcrypt = require('bcryptjs');
@@ -17,6 +18,11 @@ const userSchema = mongoose.Schema({
   photo: {
     type: String
   },
+  role: {
+    type: String,
+    enum: ['user', 'admin', 'guide', 'lead-guide'],
+    default: 'user'
+  },
   password: {
     type: String,
     required: [true, 'Please enter a password'],
@@ -35,11 +41,17 @@ const userSchema = mongoose.Schema({
     },
     required: [true, 'Please re-enter the password']
   },
-  passwordChangedAt: Date
+  passwordChangedAt: Date,
+  passwordResetToken: String,
+  passwordResetExpires: Date
 });
 
+////////////////
+// MIDDLEWARES//
+////////////////
+
 userSchema.pre('save', async function(next) {
-  // Only run the function if the password was actually modified
+  // Only run the function if the password was actually modified or new document created
   if (!this.isModified('password')) return next();
 
   //   Hash the password with cost of 12
@@ -51,11 +63,38 @@ userSchema.pre('save', async function(next) {
   next();
 });
 
+// to update changePasswordAt
+userSchema.pre('save', function(next) {
+  // Do not run if password isn't modified or the document is new
+  if (!this.isModified('password') || this.isNew) return next();
+
+  this.passwordChangedAt = Date.now() - 1000;
+  next();
+});
+
+//////////////////////
+// INSTANCE METHODS///
+//////////////////////
+
+userSchema.methods.createPasswordResetToken = function() {
+  const resetToken = crypto.randomBytes(32).toString('hex');
+
+  this.passwordResetToken = crypto
+    .createHash('sha256')
+    .update(resetToken)
+    .digest('hex');
+
+  this.passwordResetExpires = Date.now() + 10 * 60 * 1000;
+
+  return resetToken;
+};
+
 userSchema.methods.correctPassword = async function(
   candidatePassword,
   userPassword
 ) {
-  return await bcrypt.compare(candidatePassword, userPassword);
+  // returns promise
+  return bcrypt.compare(candidatePassword, userPassword);
 };
 
 userSchema.methods.changedPasswordAfter = function(JWTtimestamp) {
@@ -64,8 +103,6 @@ userSchema.methods.changedPasswordAfter = function(JWTtimestamp) {
       this.passwordChangedAt.getTime() / 1000,
       10
     );
-
-    console.log(changedTimeStamp, JWTtimestamp);
 
     return JWTtimestamp < changedTimeStamp;
   }
